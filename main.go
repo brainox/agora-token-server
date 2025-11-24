@@ -7,25 +7,28 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/AgoraIO-Community/go-tokenbuilder/rtctokenbuilder"
+	rtctokenbuilder2 "github.com/AgoraIO-Community/go-tokenbuilder/rtctokenbuilder"
 	rtmtokenbuilder2 "github.com/AgoraIO-Community/go-tokenbuilder/rtmtokenbuilder"
+
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 )
 
 var appID, appCertificate string
 
 func main() {
-	appIDEnv, appIDExists := os.LookupEnv("APP_ID")
-	appCertificateEnv, appCertificateExists := os.LookupEnv("APP_CERTIFICATE")
+	// Load .env file if present (silent fail if not found)
+	_ = godotenv.Load()
 
-	if !appIDExists || !appCertificateExists {
+	appID = os.Getenv("APP_ID")
+	appCertificate = os.Getenv("APP_CERTIFICATE")
+
+	if appID == "" || appCertificate == "" {
 		log.Fatal("Error: APP_ID and APP_CERTIFICATE environment variables are required.")
-	} else {
-		appID = appIDEnv
-		appCertificate = appCertificateEnv
 	}
+
 	api := gin.Default()
-	api.GET("/ping", func (c *gin.Context) {
+	api.GET("/ping", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"message": "pong",
 		})
@@ -44,9 +47,9 @@ func getRtcToken(c *gin.Context) {
 	if err != nil {
 		c.Error(err)
 		c.AbortWithStatusJSON(400,
-		gin.H{"message": "Error Generating RTC token: " + err.Error(),
-		"status": 400,
-	})
+			gin.H{"message": "Error Generating RTC token: " + err.Error(),
+				"status": 400,
+			})
 		return
 	}
 	// generate the token
@@ -56,7 +59,7 @@ func getRtcToken(c *gin.Context) {
 		c.Error(tokenErr)
 		c.AbortWithStatusJSON(400, gin.H{
 			"status": 400,
-			"error": "Error generating RTC token: " + tokenErr.Error(),
+			"error":  "Error generating RTC token: " + tokenErr.Error(),
 		})
 	} else {
 		c.JSON(200, gin.H{
@@ -72,7 +75,7 @@ func getRtmToken(c *gin.Context) {
 	if err != nil {
 		c.Error(err)
 		c.AbortWithStatusJSON(400, gin.H{
-			"status": 400,
+			"status":  400,
 			"message": "Error Generating RTM token: " + err.Error(),
 		})
 		return
@@ -86,7 +89,7 @@ func getRtmToken(c *gin.Context) {
 		errMsg := "Error generating RTM token: " + tokenErr.Error()
 		c.AbortWithStatusJSON(400, gin.H{
 			"status": 400,
-			"error": errMsg,
+			"error":  errMsg,
 		})
 		return
 	}
@@ -96,6 +99,45 @@ func getRtmToken(c *gin.Context) {
 }
 
 func getBothRokens(c *gin.Context) {
+	// get param values
+	channelName, tokenType, uidStr, role, expireTimestamp, rtcParamErr := parseRtcParams(c)
+	if rtcParamErr != nil {
+		c.Error(rtcParamErr)
+		c.AbortWithStatusJSON(400, gin.H{
+			"status":  400,
+			"message": "Error Generating RTC token params: " + rtcParamErr.Error(),
+		})
+		return
+	}
+	// generate rtc token
+	rtcToken, rtcTokenErr := generateRtcToken(channelName, uidStr, tokenType, role, expireTimestamp)
+	// generate rtm token
+	rtmToken, rtmTokenErr := rtmtokenbuilder2.BuildToken(appID, appCertificate, uidStr, expireTimestamp, "")
+	// return both tokens
+	if rtcTokenErr != nil {
+		log.Println(rtcTokenErr)
+		c.Error(rtcTokenErr)
+		errMsg := "Error generating RTC token: " + rtcTokenErr.Error()
+		c.AbortWithStatusJSON(400, gin.H{
+			"status":  400,
+			"message": errMsg,
+		})
+		return
+	} else if rtmTokenErr != nil {
+		log.Println(rtmTokenErr)
+		c.Error(rtmTokenErr)
+		errMsg := "Error generating RTM token: " + rtmTokenErr.Error()
+		c.AbortWithStatusJSON(400, gin.H{
+			"status":  400,
+			"message": errMsg,
+		})
+		return
+	} else {
+		c.JSON(200, gin.H{
+			"rtcToken": rtcToken,
+			"rtmToken": rtmToken,
+		})
+	}
 }
 
 func parseRtcParams(c *gin.Context) (channelName, tokenType, uidStr string, role rtctokenbuilder2.Role, expireTimestamp uint32, err error) {
@@ -104,8 +146,8 @@ func parseRtcParams(c *gin.Context) (channelName, tokenType, uidStr string, role
 	roleStr := c.Param("role")
 	tokenType = c.Param("tokenType")
 	uidStr = c.Param("uid")
-	expireTime := c.DefaultQuery("expiry","3600")
-	
+	expireTime := c.DefaultQuery("expiry", "3600")
+
 	if roleStr == "publisher" {
 		role = rtctokenbuilder2.RolePublisher
 	} else {
@@ -126,7 +168,7 @@ func parseRtcParams(c *gin.Context) (channelName, tokenType, uidStr string, role
 func parseRtmParams(c *gin.Context) (uidStr string, expireTimestamp uint32, err error) {
 	// get param values
 	uidStr = c.Param("uid")
-	expireTime := c.DefaultQuery("expiry","3600")
+	expireTime := c.DefaultQuery("expiry", "3600")
 
 	expireTime64, parseErr := strconv.ParseUint(expireTime, 10, 64)
 	if parseErr != nil {
